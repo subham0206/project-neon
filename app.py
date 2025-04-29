@@ -68,29 +68,15 @@ def start_neon_conversation():
 
 # ====== Voice Assistant Functions ======
 def autoplay_video(video_path):
-    """Auto-play introduction video"""
-    video_file = open(video_path, "rb")
-    video_bytes = video_file.read()
-    video_base64 = base64.b64encode(video_bytes).decode("utf-8")
-    video_html = f"""
-    <div style="display: flex; justify-content: center; margin-bottom: 20px;">
-        <video width="700" controls autoplay muted>
-            <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
-        </video>
-    </div>
-    """
-    st.markdown(video_html, unsafe_allow_html=True)
-'''
-def record_audio():
-    """Record audio from microphone"""
-    with st.spinner(f"Recording for {RECORD_SECONDS} seconds..."):
-        audio_data = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE),
-                          samplerate=SAMPLE_RATE,
-                          channels=1,
-                          dtype='float32')
-        sd.wait()
-        return audio_data
-'''
+    """Auto-play video from URL (optimized for Streamlit Cloud)"""
+    try:
+        # Option 1: Hosted on GitHub (recommended)
+        video_url = "project_neon_intro.mp4"
+        st.video(video_url, autoplay=True, format="video/mp4")
+        
+    except Exception as e:
+        st.error(f"Video failed to load: {str(e)}")
+
 def record_audio():
     ctx = webrtc_streamer(key="recorder", mode=WebRtcMode.SENDONLY)
     if ctx.audio_receiver:
