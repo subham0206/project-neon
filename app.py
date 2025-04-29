@@ -196,7 +196,7 @@ def main():
         if st.button("Start Recording", disabled=st.session_state.voice_state['processing']):
             st.session_state.voice_state['recording'] = True
             st.session_state.voice_state['processing'] = True
-            st.experimental_rerun()
+            st.rerun()
         
         if st.session_state.voice_state['recording']:
             with st.spinner("Recording... Speak now!"):
@@ -204,7 +204,7 @@ def main():
                 if audio_data is not None:
                     st.session_state.voice_state['user_text'] = transcribe_audio(audio_data)
                 st.session_state.voice_state['recording'] = False
-                st.experimental_rerun()
+                st.rerun()
         
         if st.session_state.voice_state['user_text']:
             st.write(f"**You said:** {st.session_state.voice_state['user_text']}")
@@ -218,7 +218,7 @@ def main():
                             {"role": "user", "content": st.session_state.voice_state['user_text']}
                         ]
                     ).choices[0].message.content
-                st.experimental_rerun()
+                st.rerun()
             
             st.write(f"**Neon responds:** {st.session_state.voice_state['gpt_response']}")
             
@@ -233,7 +233,7 @@ def main():
                     'user_text': None,
                     'gpt_response': None
                 }
-                st.experimental_rerun()
+                st.rerun()
 
 if __name__ == "__main__":
     main()
