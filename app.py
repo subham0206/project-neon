@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer,WebRtcMode
 import numpy as np
 import whisper
 from openai import OpenAI
@@ -10,6 +9,9 @@ from pathlib import Path
 import base64
 import requests
 from urllib.parse import quote
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+from threading import Lock
+import queue
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -77,27 +79,53 @@ def autoplay_video(video_path):
     except Exception as e:
         st.error(f"Video failed to load: {str(e)}")
 
+# Initialize session state
+if 'voice_state' not in st.session_state:
+    st.session_state.voice_state = {
+        'recording': False,
+        'processing': False,
+        'user_text': None,
+        'gpt_response': None,
+        'audio_frames': queue.Queue()
+    }
+
+# Audio processor class
+class AudioProcessor(AudioProcessorBase):
+    def __init__(self):
+        self.frames_lock = Lock()
+        self.frames = queue.Queue()
+
+    def recv(self, frame):
+        with self.frames_lock:
+            self.frames.put(frame.to_ndarray())
+        return frame
+
+# Audio processing functions
 def record_audio():
     """Record audio using streamlit-webrtc"""
-    audio_frames = []
-    ctx = webrtc_streamer(
+    audio_processor = AudioProcessor()
+    webrtc_ctx = webrtc_streamer(
         key="recorder",
         mode=WebRtcMode.SENDONLY,
-        audio_receiver_size=1024,
-        media_stream_constraints={
-            "audio": True,
-            "video": False
-        }
+        audio_processor_factory=AudioProcessor,
+        media_stream_constraints={"audio": True, "video": False},
+        async_processing=True
     )
     
-    if ctx.audio_receiver:
-        try:
-            for frame in ctx.audio_receiver.get_frames(timeout=RECORD_SECONDS):
-                audio_frames.append(frame.to_ndarray())
-            if audio_frames:
-                return np.concatenate(audio_frames)
-        except Exception as e:
-            st.error(f"Recording error: {e}")
+    if webrtc_ctx.audio_processor:
+        while not st.session_state.voice_state['audio_frames'].empty():
+            st.session_state.voice_state['audio_frames'].get()
+        
+        while webrtc_ctx.state.playing:
+            if not webrtc_ctx.audio_processor.frames.empty():
+                frame = webrtc_ctx.audio_processor.frames.get()
+                st.session_state.voice_state['audio_frames'].put(frame)
+    
+    if not st.session_state.voice_state['audio_frames'].empty():
+        frames = []
+        while not st.session_state.voice_state['audio_frames'].empty():
+            frames.append(st.session_state.voice_state['audio_frames'].get())
+        return np.concatenate(frames)
     return None
 
 def transcribe_audio(audio_data):
@@ -107,16 +135,15 @@ def transcribe_audio(audio_data):
             tmp_path = tmp_file.name
             scaled = np.int16(audio_data * 32767)
             import scipy.io.wavfile
-            scipy.io.wavfile.write(tmp_path, SAMPLE_RATE, scaled)
+            scipy.io.wavfile.write(tmp_path, 16000, scaled)
         
         model = whisper.load_model("base")
         result = model.transcribe(tmp_path)
         
         try:
             os.unlink(tmp_path)
-        except PermissionError:
-            import atexit
-            atexit.register(lambda: os.unlink(tmp_path) if os.path.exists(tmp_path) else None)
+        except:
+            pass
         
         return result["text"]
     except Exception as e:
@@ -135,6 +162,57 @@ def text_to_speech(text):
 def play_audio(audio_bytes):
     """Play audio in browser"""
     st.audio(audio_bytes, format="audio/mp3")
+
+# Voice Assistant UI
+def voice_assistant_ui():
+    st.header("🎙️ Voice Assistant")
+    
+    if st.button("Start Recording", key="start_recording"):
+        st.session_state.voice_state['recording'] = True
+        st.session_state.voice_state['processing'] = True
+        st.session_state.voice_state['user_text'] = None
+        st.session_state.voice_state['gpt_response'] = None
+    
+    if st.session_state.voice_state['recording']:
+        with st.spinner("Recording... Speak now!"):
+            audio_data = record_audio()
+            if audio_data is not None:
+                st.session_state.voice_state['user_text'] = transcribe_audio(audio_data)
+            st.session_state.voice_state['recording'] = False
+    
+    if st.session_state.voice_state['user_text']:
+        st.write(f"**You said:** {st.session_state.voice_state['user_text']}")
+        
+        if st.session_state.voice_state['gpt_response'] is None:
+            with st.spinner("Processing your request..."):
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": "You are Project Neon..."},
+                            {"role": "user", "content": st.session_state.voice_state['user_text']}
+                        ]
+                    )
+                    st.session_state.voice_state['gpt_response'] = response.choices[0].message.content
+                except Exception as e:
+                    st.error(f"Error generating response: {str(e)}")
+        
+        if st.session_state.voice_state['gpt_response']:
+            st.write(f"**Neon responds:** {st.session_state.voice_state['gpt_response']}")
+            
+            if st.button("Play Response"):
+                audio_response = text_to_speech(st.session_state.voice_state['gpt_response'])
+                play_audio(audio_response)
+            
+            if st.button("Start New Conversation"):
+                st.session_state.voice_state = {
+                    'recording': False,
+                    'processing': False,
+                    'user_text': None,
+                    'gpt_response': None,
+                    'audio_frames': queue.Queue()
+                }
+                st.rerun()
 
 # ====== Main App Layout ======
 def main():
@@ -190,51 +268,8 @@ def main():
                 st.error("Failed to start conversation. Please try again.")
                 
     with col2:
-        st.header("🎙️ Voice Assistant")
-        st.markdown("Speak with Neon using your microphone")
-        
-        if st.button("Start Recording", disabled=st.session_state.voice_state['processing']):
-            st.session_state.voice_state['recording'] = True
-            st.session_state.voice_state['processing'] = True
-            st.rerun()
-        
-        if st.session_state.voice_state['recording']:
-            with st.spinner("Recording... Speak now!"):
-                audio_data = record_audio()
-                if audio_data is not None:
-                    st.session_state.voice_state['user_text'] = transcribe_audio(audio_data)
-                st.session_state.voice_state['recording'] = False
-                st.rerun()
-        
-        if st.session_state.voice_state['user_text']:
-            st.write(f"**You said:** {st.session_state.voice_state['user_text']}")
-            
-            if st.session_state.voice_state['gpt_response'] is None:
-                with st.spinner("Processing your request..."):
-                    st.session_state.voice_state['gpt_response'] = client.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[
-                            {"role": "system", "content": "You are Project Neon..."},
-                            {"role": "user", "content": st.session_state.voice_state['user_text']}
-                        ]
-                    ).choices[0].message.content
-                st.rerun()
-            
-            st.write(f"**Neon responds:** {st.session_state.voice_state['gpt_response']}")
-            
-            if st.button("Play Response"):
-                audio_response = text_to_speech(st.session_state.voice_state['gpt_response'])
-                play_audio(audio_response)
-            
-            if st.button("Start New Conversation"):
-                st.session_state.voice_state = {
-                    'recording': False,
-                    'processing': False,
-                    'user_text': None,
-                    'gpt_response': None
-                }
-                st.rerun()
+        voice_assistant_ui()
 
 if __name__ == "__main__":
     main()
-    
+        
