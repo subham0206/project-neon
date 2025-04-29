@@ -1,8 +1,8 @@
-streamlit==1.29.0
-openai==1.12.0
-whisper==1.1.10
-soundfile==0.12.1
-requests==2.31.0
-numpy==1.26.0
-scipy==1.9.3  # Specifically this version works on Streamlit Cloud
-streamlit-webrtc==0.47.1
+streamlit
+openai
+whisper
+soundfile
+requests
+numpy
+scipy
+streamlit-webrtc
